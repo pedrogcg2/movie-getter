@@ -4,44 +4,81 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
+	"log"
 	"net/http"
+	"os"
+
+	"github.com/joho/godotenv"
 )
 
-func main() {
-	page := 1
-	language := "pt-BR"
-	bearer := ""
+var BEARER_TMBD string
 
-	url := fmt.Sprintf("https://api.themoviedb.org/3/movie/popular?page=%d&language=%s",
-		page, language)
+func main() {
+	initEnv()
+
+	page := 1
 
 	client := &http.Client{}
-	req, error := http.NewRequest("GET", url, nil)
+	pageMax := 1
 
+	for {
+		fmt.Println(fmt.Sprintf("Current Page: %d", page))
+		movieResponse, error := getMovies(client, page)
+
+		if error != nil {
+			log.Fatal("error: %s", error.Error())
+		}
+
+		error = sendMoviesToApi(client, &movieResponse.Movies)
+
+		if error != nil {
+			log.Fatal("error: %s", error.Error())
+		}
+		page = page + 1
+		pageMax = movieResponse.TotalPages
+		if page > pageMax {
+			fmt.Println("Successfully get all pages")
+			return
+		}
+	}
+}
+
+func initEnv() {
+	err := godotenv.Load(".env")
+	if err != nil {
+		log.Fatal(fmt.Sprintf("Couldnt load env file: %s ", err.Error()))
+	}
+
+	BEARER_TMBD = os.Getenv("TMDB_AUTH")
+}
+
+func getMovies(client *http.Client, page int) (*MovieResponse, error) {
+	req, error := http.NewRequest("GET", url, nil)
 	req.Header.Add("accept", "application/json")
-	req.Header.Add("Authorization", bearer)
+	req.Header.Add("Authorization", BEARER_TMBD)
+
+	fmt.Println(req.URL.String())
 
 	response, error := client.Do(req)
 	if error != nil {
-		fmt.Println("Deu ruim pae")
-		fmt.Println(error.Error())
-		return
+		return nil, error
 	}
 	defer response.Body.Close()
 
-	var movieResponse MovieResponse
-	error = json.NewDecoder(response.Body).Decode(&movieResponse)
+	movieResponse := &MovieResponse{}
+	error = json.NewDecoder(response.Body).Decode(movieResponse)
 
 	if error != nil {
-		fmt.Println("Deu ruim pae 3")
-		fmt.Println(error.Error())
-		return
+		return nil, error
 	}
 
+	return movieResponse, nil
+}
+
+func sendMoviesToApi(client *http.Client, movies *[]Movie) error {
 	bodyRequest := []MovieRequest{}
 
-	for _, movie := range movieResponse.Movies {
+	for _, movie := range *movies {
 		newMovie := MovieRequest{
 			ExternalId:  movie.Id,
 			Name:        movie.Title,
@@ -51,25 +88,18 @@ func main() {
 		bodyRequest = append(bodyRequest, newMovie)
 	}
 
-	bodyJson, _ := json.Marshal(bodyRequest)
-	body := bytes.NewBuffer(bodyJson)
+	json, _ := json.Marshal(bodyRequest)
+	bodyBuffer := bytes.NewBuffer(json)
 
-	fmt.Println(string(bodyJson))
-	postReq, error := http.NewRequest("POST", "http://localhost:8000/movies", body)
+	postReq, error := http.NewRequest("POST", "http://localhost:8000/movies", bodyBuffer)
 
-	res, error := client.Do(postReq)
+	_, error = client.Do(postReq)
 
 	if error != nil {
-		fmt.Println("Deu ruim pae 4")
-		fmt.Println(error.Error())
-		return
+		return error
 	}
-	defer res.Body.Close()
 
-	fmt.Println(res.Status)
-	bs, _ := io.ReadAll(res.Body)
-	fmt.Println(string(bs))
-	fmt.Println("deu bom")
+	return nil
 }
 
 type MovieResponse struct {
@@ -80,15 +110,15 @@ type MovieResponse struct {
 }
 
 type Movie struct {
-	Id          int
 	Title       string
 	Image       string `json:"poster_path"`
 	Description string `json:"overview"`
+	Id          int
 }
 
 type MovieRequest struct {
-	ExternalId  int
 	Name        string
 	Image       string
 	Description string
+	ExternalId  int
 }
